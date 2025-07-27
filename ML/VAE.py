@@ -240,6 +240,7 @@ class myMemPolyVAE(myVAE):
 
         self.txTerms = fastPolyPrefix(self.tx.detach().cpu().numpy())
         
+        # First submission version
         self.encoder = nn.Sequential(
             nn.Conv1d(2, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
             nn.BatchNorm1d(32),
@@ -260,10 +261,39 @@ class myMemPolyVAE(myVAE):
             nn.Conv1d(16, 2, kernel_size=5, stride=1, padding=2),
             )
         
+        # # Major revision: scan hyperparameters
+        # self.encoder = nn.Sequential(
+        #     nn.Conv1d(2, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+        #     nn.Conv1d(32, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+        #     nn.Conv1d(32, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+        #     nn.Conv1d(32, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+        #     nn.Conv1d(32, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+        #     nn.Conv1d(32, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+        #     nn.BatchNorm1d(32),
+        #     nn.LeakyReLU(),
+
+            # nn.Conv1d(32, 2, kernel_size=5, stride=1, padding=2),
+            # )
+        
                 # input: (N,hidden_dim) -> output: (N, Z)
         self.mean_layer = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(in_features=1600, out_features=64),
+            nn.Linear(in_features=1600, out_features=64), #sdr->2*800, wifi->2*480
             nn.BatchNorm1d(64),
             nn.LeakyReLU(),
 

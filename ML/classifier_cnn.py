@@ -135,7 +135,7 @@ class Classifier2D(nn.Module):
 
         return x
 
-def addNoise2Batch(batch_data, snr, norm=False, device='cuda'):
+def addNoise2Batch(batch_data, snr, shape, norm=False, device='cuda'):
     # seed=0
     # np.random.seed(seed)
     snr = 10**(snr/10)
@@ -150,9 +150,9 @@ def addNoise2Batch(batch_data, snr, norm=False, device='cuda'):
         sigPower = np.sum(sig[0]**2+sig[1]**2)/len(sig[0])
         noisePower = sigPower/snr
         noiseSigma = np.sqrt(noisePower/2) # 2 way signal
-        noise = np.zeros((2, 800))
-        noise[0] = noiseSigma*np.random.randn(800)
-        noise[1] = noiseSigma*np.random.randn(800)
+        noise = np.zeros(shape)
+        noise[0] = noiseSigma*np.random.randn(shape[-1])
+        noise[1] = noiseSigma*np.random.randn(shape[-1])
         # batch_data[i] = torch.tensor(sig + noise).to(device)
         # data_noised[i] = torch.tensor(sig + noise)
         data_noised[i] = sig + noise
