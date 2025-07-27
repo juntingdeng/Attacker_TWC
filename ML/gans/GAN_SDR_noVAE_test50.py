@@ -14,7 +14,7 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import scipy.io
 import csv
-from VAE import myMemPolyVAE, fastPolyPrefix, fastPolyPrefixOut
+from ML.gans.VAE import myMemPolyVAE, fastPolyPrefix, fastPolyPrefixOut
 from classifier_cnn import Classifier, Classifier2D, addNoise2Batch
 from GAN_SDR import ClassifierSDR
 from GAN_SDR_noVAE import sigGenerator

@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import scipy.io
-from VAE import myVAE
+from ML.gans.VAE import myVAE
 from classifier_cnn import addNoise2Batch
 from GAN_PA_updatedRFF import getACC
 

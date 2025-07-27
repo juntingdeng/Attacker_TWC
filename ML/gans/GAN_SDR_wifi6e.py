@@ -14,133 +14,18 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import scipy.io
 import csv
-from VAE import myMemPolyVAE
-from classifier_cnn import Classifier, Classifier2D, addNoise2Batch
+from ML.gans.VAE import myMemPolyVAE
+from classifier_cnn import addNoise2Batch
+from GAN_SDR import ClassifierSDR, Discriminator
 # import matlab.engine
 import __main__
 
 
-class ClassifierSDR(nn.Module):
-    def __init__(self, nSDR):
-        super().__init__()
 
-        #For 800 length 
-        self.conv0 = nn.Conv1d(in_channels=2, out_channels=32, kernel_size=5,stride=1, padding=2) # => 8*800
-        self.conv1 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=5,stride=1, padding=2) # => 8*800
-        self.conv2 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=8,stride=2, padding=3) # => 16*400
-        self.conv3 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=6, stride=2, padding=2) # => sdrBLE -> 16*200, wifi-> 120
-
-        self.linear1 = nn.Linear(in_features=32*120, out_features=256)
-        self.linear2 = nn.Linear(in_features=256, out_features=nSDR)
-
-    def __call__(self, x):
-        return self.forward(x)
-
-    def forward(self, x):
-
-        #For 800 length 
-        x=F.relu(self.conv0(x))
-        x=F.relu(self.conv1(x))
-        x=F.relu(self.conv2(x))
-        x=F.relu(self.conv3(x))
-
-        # x=self.maxpool1(x)
-        flatten = nn.Flatten()
-        x=flatten(x)
-        x=F.relu(self.linear1(x))
-        x=self.linear2(x)
-
-        return x
-
-class Discriminator(nn.Module):
-    def __init__(self, in_dim):
-        super(Discriminator, self).__init__()
-        self.model = nn.Sequential(
-            nn.Linear(in_dim, 256),
-            nn.ReLU(),
-
-            nn.Linear(256, 32),
-            nn.ReLU(),
-
-            nn.Linear(32, 1),
-            nn.Sigmoid()
-            )
-
-    def forward(self, x):
-        flatten = nn.Flatten()
-        x=flatten(x)
-        x=self.model(x)
-        if torch.isnan(x).any():
-            print("Discriminator output nan")
-        return x
-
-def corelation(x, y): #x,y are both n-d vector
-    x_mean=np.mean(x)
-    y_mean=np.mean(y)
-    cov_xy=0
-    var_x=0
-    var_y=0
-    for i in range(x.shape[0]):
-        cov_xy+=(x[i]-x_mean)*(y[i]-y_mean)
-        var_x+=(x[i]-x_mean)*(x[i]-x_mean)
-        var_y+=(y[i]-y_mean)*(y[i]-y_mean)
-    corr = cov_xy/(np.sqrt(var_x*var_y))
-    return corr
-
-def classify_by_correlation(signals, datasets_220, targets_220):
-    batch_size=signals.shape[0]
-    targets=np.zeros((batch_size, 12))
-    for bc in range(batch_size):
-        r=np.zeros((220,))
-        for i in range(datasets_220.shape[0]):
-            r_real = corelation(signals[bc][0], datasets_220[i][0])
-            r_imag = corelation(signals[bc][1], datasets_220[i][1])
-            r[i] = (r_real+r_imag)/2
-        rff_idx = np.argmax(r)
-        targets[bc]=targets_220[rff_idx]
-    return targets
-
-def ReadSignalFromCsv(file, channel=2, num_samples=800):
-    inf=[-1.7976931348623158e+308, 1.7976931348623158e+308]
-    signals=[]
-    with open(file, newline='') as csvfile:
-        spamreader = csv.reader(csvfile, delimiter=',')
-        i=0
-        while True:
-            read_line = next(spamreader)
-            if inf[0]<=float(read_line[0])<=inf[1]:
-                break
-        total_col = len(read_line)
-        total_points = total_col//channel
-        read_all_signs = np.zeros((total_points, channel, num_samples))
-
-        row_idx=0
-        for row in spamreader:
-            for i in range(len(row)):
-                point_idx = i//channel
-                read_all_signs[point_idx, i%channel, row_idx]=float(row[i])
-            row_idx+=1
-            if row_idx>=num_samples:
-                break
-    return read_all_signs
-
-def main(seed, 
-         distiance,
-         SNR, 
-         LR, 
-         n_epoch, 
-         batch_size, 
-         degLen, 
-         memLen, 
-         save_ckp, 
-         save_time, 
-         save_path,
-         pretrained=False,
-         pretrained_path=None):
+def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, save_ckp, save_time, save_path):
     print("+++++++++++++++++++Start main()+++++++++++++++++++") 
     samples_perSDR=300
     start = 0
-    nSDR = 11
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     random.seed(seed)
@@ -153,7 +38,6 @@ def main(seed,
     print("save_ckp: {}".format(save_ckp))
     print("save_time: {}".format(save_time))
 
-    # save_path = save_path+"pretrained_3m/" if pretrained else save_path
     if not os.path.exists(save_path+"/ckp"):
         os.makedirs(save_path+"/ckp")
     if not os.path.exists(save_path+"/time_curve"):
@@ -161,107 +45,48 @@ def main(seed,
 
     setattr(__main__, "ClassifierSDR", ClassifierSDR)
     classifier = ClassifierSDR(nSDR=nSDR)
-    clf_load=torch.load("./checkpoint2/classifier/11SDR_nosnr_normall_epoch200.cnn", map_location=device)
+    clf_load=torch.load(clf_path, map_location=device)
     # clf_load=torch.load("./checkpoint/ClassifierSDR/11SDR_normseperate_epoch2000.cnn", map_location=device)
     classifier=clf_load["classifier"]
     train_acc=clf_load["train_acc"]
     val_acc=clf_load["val_acc"]
-    test_acc=clf_load["test_acc"]
-    print("Load clf, train_acc:{:.2f}%, val_acc:{:.2f}%, test_acc:{:.2f}%".format(train_acc.item()*100, val_acc.item()*100, test_acc.item()*100))
+    print("Load clf, train_acc:{:.2f}%, val_acc:{:.2f}%".format(train_acc.item()*100, val_acc.item()*100))
 
-    idata=ReadSignalFromCsv('./data/IDataTime.csv')[0][1]
-    qdata=-ReadSignalFromCsv('./data/QDataTime.csv')[0][1]
-    preamble_real = torch.tensor(idata.squeeze(), dtype=torch.float).to(device)
-    preamble_imag = torch.tensor(-qdata.squeeze(), dtype=torch.float).to(device)
+    preamble_path = "./data/wifi6e16qam/txSelectedPreambleDecimateDefault.mat"
+    preamble_comp = scipy.io.loadmat(preamble_path)
+    keys = list(preamble_comp.keys())
+    preamble_comp = preamble_comp[keys[-1]].reshape(-1)
+    preamble_real = torch.tensor(np.real(preamble_comp), dtype=torch.float).to(device)
+    preamble_imag = torch.tensor(np.imag(preamble_comp), dtype=torch.float).to(device)
     print("preamble real: ", preamble_real.shape)
     print("preamble imag: ", preamble_imag.shape)
+
+    datasetdict_load = np.load("./data/wifi6e16qam/wifi6e220RFFs.npy", allow_pickle=True).item()
+    print(datasetdict_load.keys())
+    dataset_load, target_load = datasetdict_load['dataset'], datasetdict_load['target']
+    nlabels = nSDR
+    nrepeat = 300
+    datasets_all = np.zeros((nlabels*nrepeat, 2, 480))
+    targets_all = np.zeros(nlabels*nrepeat)
+    for labeli in range(nlabels):
+        for repeati in range(nrepeat):
+            datasets_all[labeli*nrepeat+repeati] = dataset_load[labeli]
+            targets_all[labeli*nrepeat+repeati] = target_load[labeli]
     
-    matFiles25=["pluto1_0.25meters_run2.mat",
-    "pluto2_0.25meters_run2.mat",
-    "pluto3_0.25meters_run2.mat",
-    "AD9082_0.25meters_run2.mat",
-    "AD9082_CC2595_amp1_0.25meters_run2.mat",
-    "TI_TRF3705_0.25meters.mat",
-    "TI_TRF3705_CC2595_amp1_0.25meters.mat",
-    "TI_TRF3722_CC2595_amp1_0.25meters.mat",
-    "TI_TRF3722_0.25meters.mat",
-    "Pluto1RX_9082TX_0.25meters_NoAGC10Gain_3pkthreshold_348samples.mat",
-    "Pluto1RX_9082_CC2595_TX_0.25meters_3pkthreshold_582samples.mat"]
-
-    matFiles100=["pluto1_1.0meters.mat",
-    "pluto2_1.0meters.mat",
-    "pluto3_1.0meters.mat",
-    "AD9082_1.0meters.mat",
-    "AD9082_CC2595_amp1_1.0meters.mat",
-    "TI_TRF3705_1.0meters.mat",
-    "TI_TRF3705_CC2595_amp1_1.0meters.mat",
-    "TI_TRF3722_CC2595_amp1_1.0meters.mat",
-    "TI_TRF3722_1.0meters.mat",
-    "Pluto1RX_9082TX_1.0meters.mat",
-    "Pluto1RX_9082_CC2595_TX_1.0meters.mat"]
-
-    matFiles200=["pluto1_2.0meters.mat",
-        "pluto2_2.0meters.mat",
-        "pluto3_2.0meters.mat",
-        "AD9082_2.0meters.mat",
-        "AD9082_CC2595_amp1_2.0meters.mat",
-        "TI_TRF3705_2.0meters.mat",
-        "TI_TRF3705_CC2595_amp1_2.0meters.mat",
-        "TI_TRF3722_CC2595_amp1_2.0meters.mat",
-        "TI_TRF3722_2.0meters.mat",
-        "Pluto1RX_9082TX_2.0meters.mat",
-        "Pluto1RX_9082_CC2595_TX_2.0meters.mat"]
-
-    matFiles300=["pluto1_3.0meters.mat",
-        "pluto2_3.0meters.mat",
-        "pluto3_3.0meters.mat",
-        "AD9082_3.0meters.mat",
-        "AD9082_CC2595_amp1_3.0meters.mat",
-        "TI_TRF3705_3.0meters.mat",
-        "TI_TRF3705_CC2595_amp1_3.0meters.mat",
-        "TI_TRF3722_CC2595_amp1_3.0meters.mat",
-        "TI_TRF3722_3.0meters.mat",
-        "Pluto1RX_9082TX_3.0meters.mat",
-        "Pluto1RX_9082_CC2595_TX_3.0meters.mat"]
-
-    matFiles = {0.25: matFiles25, 1.0: matFiles100, 2.0: matFiles200, 3.0: matFiles300}
-    matFile = matFiles[distance]
-    datasets_allSDR=None
-    targets_allSDR=None
-    samples_perSDR=500
-    duplicate=4
-    magn=17.032302068590234
-    for matfilei in range(0, len(matFile)):
-        matfile = matFile[matfilei]
-        datasets_load=scipy.io.loadmat("./data/{}meters/{}".format(distance, matfile))['packet_equalized_allrecord']
-        datasets_load = datasets_load[:samples_perSDR] #if datasets_load.shape[0]>=samples_perSDR else datasets_load
-        targets_load = matfilei*np.ones(datasets_load.shape[0])
-        print("SDR: {}, range: {}~{}".format(matfilei, datasets_load.min(), datasets_load.max()))
-        datasets_allSDR = np.concatenate([datasets_allSDR, datasets_load], axis=0) if matfilei!=0 else datasets_load
-        targets_allSDR = np.concatenate([targets_allSDR, targets_load], axis=0) if matfilei!=0 else targets_load
-    datasets_allSDR_magn = np.max((np.abs(datasets_allSDR.min()), np.abs(datasets_allSDR.max())))
-    datasets_allSDR = datasets_allSDR/datasets_allSDR_magn
-    print("datasets load all sdr shape: ", datasets_allSDR.shape)
-    print("targets load all sdr shape: ", targets_allSDR.shape)
-    print("datasets load all sdr and norm range: {}~{}".format(datasets_allSDR.min(), datasets_allSDR.max()))
+    datasetall_magn = np.max((np.abs(datasets_all.min()), np.abs(datasets_all.max())))
+    datasets_all /= datasetall_magn
     
-    for SDRlabel in range(start, min(start+nSDR, len(matFile))):
-        print("\n-----------------SNR:{}, Distance:{}, SDRlabel:{}-----------------".format(SNR, distance, SDRlabel))
+    for SDRlabel in range(start, start+nSDR):
+        print("\n-----------------SNR:{}, SDRlabel:{}-----------------".format(SNR, SDRlabel))
         timer_curve={}
         max_train_acc=0
         max_val_acc=0
 
-        datasets = datasets_allSDR[SDRlabel*samples_perSDR: (SDRlabel+1)*samples_perSDR]
-        targets = targets_allSDR[SDRlabel*samples_perSDR: (SDRlabel+1)*samples_perSDR]
-        datasets_dup = np.zeros((datasets.shape[0]*duplicate, datasets.shape[1], datasets.shape[2]))
-        targets_dup = np.zeros((targets.shape[0]*duplicate,))
-        for d in range(1, duplicate):
-            datasets_dup[d*datasets.shape[0]: (d+1)*datasets.shape[0]] = addNoise2Batch(datasets, snr=SNR, shape=datasets.shape[1:], norm=False, device=device)
-            targets_dup[d*datasets.shape[0]: (d+1)*datasets.shape[0]] = targets
-        
-
-        datasets=torch.tensor(datasets_dup, dtype=float).to(device)
-        targets=torch.tensor(targets_dup, dtype=torch.int64).to(device)
+        datasets = datasets_all[SDRlabel*nrepeat: (SDRlabel+1)*nrepeat]
+        targets = targets_all[SDRlabel*nrepeat: (SDRlabel+1)*nrepeat]
+        datasets = addNoise2Batch(datasets, SNR, shape=datasets.shape[1:], norm=False, device=device)        
+        datasets=torch.tensor(datasets, dtype=float).to(device)
+        targets=torch.tensor(targets, dtype=torch.int64).to(device)
         print("datasets: ", datasets.shape)
         print("targets: ", targets.shape)
         print("datasets range: ", datasets.max(), datasets.min())
@@ -284,26 +109,15 @@ def main(seed,
             input_dim=input_dim*datasets.shape[i]
         latent_dim=2
         poly_dim= degLen*memLen #15
-        if pretrained:
-            ckps = os.listdir(pretrained_path)
-            for ckp in ckps:
-                if len(ckp.split("_"))<2: continue
-                sdr_load = int(ckp.split("_")[0][3:])
-                if sdr_load == SDRlabel:
-                    ckp_load=torch.load(pretrained_path+ckp, map_location=device)
-                    generator = ckp_load["generator"]
-                    discriminator = ckp_load["discriminator"]
-                    generator.device = device
-        else:
-            generator = myMemPolyVAE(txReal=preamble_real, 
-                                    txImag=preamble_imag, 
-                                    input_dim=input_dim, 
-                                    latent_dim=latent_dim, 
-                                    poly_dim=poly_dim, 
-                                    batch_size=batch_size,  
-                                    device=device,
-                                    train=True).to(device)        
-            discriminator = Discriminator(input_dim).to(device)
+        generator = myMemPolyVAE(txReal=preamble_real, 
+                                 txImag=preamble_imag, 
+                                 input_dim=input_dim, 
+                                 latent_dim=latent_dim, 
+                                 poly_dim=poly_dim, 
+                                 batch_size=batch_size,  
+                                 device=device,
+                                 train=True).to(device)        
+        discriminator = Discriminator(input_dim).to(device)
         
         criterion_disc = nn.BCELoss()
         criterion_cnn = nn.CrossEntropyLoss()
@@ -546,36 +360,26 @@ def main(seed,
     print("+++++++++++++++++++End main()+++++++++++++++++++\n") 
 
 if __name__ == "__main__":
-    seed=0
-    LR = 1e-3 #sys.argv[1:] #default 1e-3
-    # LR = [float(x) for x in LR][0]
-    n_epoch = 2000
-    batch_size = 32#sys.argv[1:]# default 32
-    # batch_size = [int(x) for x in batch_size][0]
+    seed=345
     degLen=5
     memLen=3
-    SNR = sys.argv[1:2]
+    SNR = sys.argv[1:]
     SNR = [int(x) for x in SNR][0]
-    en_dim = 32 #sys.argv[1:]
-    # en_dim = [int(x) for x in en_dim][0] #default 32-16
-    en_layers = 7
-
-    pretrained = True
-    distance = sys.argv[2:3]
-    distance = [float(x) for x in distance][0]
-    save_path = "./checkpoint2/gan/gan_poly_ray_9SDR_normAll_nosnrclf_{}meters/pretrained{}/snr{}/seed{}/bs{}/".format(
-        distance, int(pretrained), SNR, seed, batch_size)
-    pretrained_path = "./checkpoint2/gan/gan_poly_ray_SDR_normAll_nosnrclf_bn_dup/snr{}/seed{}/ckp/".format(SNR, seed)
+    nSDR = 220
+    LR = 5e-3
+    n_epoch = 5000
+    batch_size = 32
+    clf_path =  "./checkpoint2/classifier/wifi6e_220RFF_nrepeat300_epoch1000.cnn"
+    save_path = "./checkpoint2/gan/gan_poly_ray_WIFI6E220_normAll_nosnrclf_bn_poly_deg"+str(degLen)+"_mem"+str(memLen)+"/snr"+str(SNR)+"/seed"+str(seed)+"/"
     main(seed=seed,
-         distiance=distance,
-         SNR=SNR,
+         nSDR=nSDR,
          LR=LR,
          n_epoch=n_epoch,
          batch_size=batch_size,
+         SNR=SNR,
          degLen=degLen,
          memLen=memLen,
+         clf_path=clf_path,
          save_ckp=True,
          save_time=True,
-         save_path=save_path,
-         pretrained=pretrained, # Pretrained on 0.25ckp
-         pretrained_path=pretrained_path)
+         save_path=save_path)

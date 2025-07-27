@@ -14,18 +14,56 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import scipy.io
 import csv
-from VAE import myMemPolyVAE
+from ML.gans.VAE import myMemPolyVAE
 from classifier_cnn import addNoise2Batch
-from GAN_SDR import ClassifierSDR, Discriminator
+from GAN_SDR import ClassifierSDR, Discriminator, ReadSignalFromCsv
 # import matlab.engine
 import __main__
 
+class sigGenerator(nn.Module):
+        def __init__(self, batch_size, device='cpu'):
+            super(sigGenerator, self).__init__()
+            self.batch_size = batch_size
+            self.device=device
+            self.generator = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(),
+            nn.Conv1d(32, 16, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+            nn.BatchNorm1d(16),
+            nn.LeakyReLU(),
+            nn.Conv1d(16, 16, kernel_size=5, stride=1, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+            nn.BatchNorm1d(16),
+            nn.LeakyReLU(),
+            nn.Conv1d(16, 2, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm1d(2),
+            nn.LeakyReLU(),
 
+            # 3 laten layers: (102,400+128) *3 = 307,584
 
-def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, save_ckp, save_time, save_path):
+            nn.Conv1d(2, 4, kernel_size=5, padding=2), #k=5 for 40 samples, k=5 for 800 samples
+            nn.BatchNorm1d(4),
+            nn.LeakyReLU(),
+            nn.Conv1d(4, 2, kernel_size=5, padding=2),
+            )
+
+        def forward(self, x, device='cpu'):
+            x_hat = self.generator(x)
+            return x_hat
+        
+        def loss_function(self, x_hat, x, ):
+            reconstruction_loss = F.mse_loss(x_hat, x, reduction='sum')/self.batch_size
+            loss=reconstruction_loss
+            return loss 
+
+def main(seed, SNR, degLen, memLen, save_ckp, save_time, save_path):
     print("+++++++++++++++++++Start main()+++++++++++++++++++") 
     samples_perSDR=300
     start = 0
+    nSDR = 11
+    LR = 1e-3
+    n_epoch = 2000
+    batch_size = 32
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     random.seed(seed)
@@ -45,36 +83,51 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
 
     setattr(__main__, "ClassifierSDR", ClassifierSDR)
     classifier = ClassifierSDR(nSDR=nSDR)
-    clf_load=torch.load(clf_path, map_location=device)
+    clf_load=torch.load("./checkpoint2/classifier/11SDR_nosnr_normall_epoch200.cnn", map_location=device)
     # clf_load=torch.load("./checkpoint/ClassifierSDR/11SDR_normseperate_epoch2000.cnn", map_location=device)
     classifier=clf_load["classifier"]
     train_acc=clf_load["train_acc"]
     val_acc=clf_load["val_acc"]
-    print("Load clf, train_acc:{:.2f}%, val_acc:{:.2f}%".format(train_acc.item()*100, val_acc.item()*100))
+    test_acc=clf_load["test_acc"]
+    print("Load clf, train_acc:{:.2f}%, val_acc:{:.2f}%, test_acc:{:.2f}%".format(train_acc.item()*100, val_acc.item()*100, test_acc.item()*100))
 
-    preamble_path = "./data/wifi6e16qam/txSelectedPreambleDecimateDefault.mat"
-    preamble_comp = scipy.io.loadmat(preamble_path)
-    keys = list(preamble_comp.keys())
-    preamble_comp = preamble_comp[keys[-1]].reshape(-1)
-    preamble_real = torch.tensor(np.real(preamble_comp), dtype=torch.float).to(device)
-    preamble_imag = torch.tensor(np.imag(preamble_comp), dtype=torch.float).to(device)
+    idata=ReadSignalFromCsv('./data/IDataTime.csv')[0][1]
+    qdata=-ReadSignalFromCsv('./data/QDataTime.csv')[0][1]
+    preamble_real = torch.tensor(idata.squeeze(), dtype=torch.float).to(device)
+    preamble_imag = torch.tensor(-qdata.squeeze(), dtype=torch.float).to(device)
     print("preamble real: ", preamble_real.shape)
     print("preamble imag: ", preamble_imag.shape)
-
-    datasetdict_load = np.load("./data/wifi6e16qam/wifi6e220RFFs.npy", allow_pickle=True).item()
-    print(datasetdict_load.keys())
-    dataset_load, target_load = datasetdict_load['dataset'], datasetdict_load['target']
-    nlabels = nSDR
-    nrepeat = 300
-    datasets_all = np.zeros((nlabels*nrepeat, 2, 480))
-    targets_all = np.zeros(nlabels*nrepeat)
-    for labeli in range(nlabels):
-        for repeati in range(nrepeat):
-            datasets_all[labeli*nrepeat+repeati] = dataset_load[labeli]
-            targets_all[labeli*nrepeat+repeati] = target_load[labeli]
     
-    datasetall_magn = np.max((np.abs(datasets_all.min()), np.abs(datasets_all.max())))
-    datasets_all /= datasetall_magn
+    matFiles=["pluto1_0.25meters_run2.mat",
+    "pluto2_0.25meters_run2.mat",
+    "pluto3_0.25meters_run2.mat",
+    "AD9082_0.25meters_run2.mat",
+    "AD9082_CC2595_amp1_0.25meters_run2.mat",
+    "TI_TRF3705_0.25meters.mat",
+    "TI_TRF3705_CC2595_amp1_0.25meters.mat",
+    "TI_TRF3722_CC2595_amp1_0.25meters.mat",
+    "TI_TRF3722_0.25meters.mat",
+    "Pluto1RX_9082TX_0.25meters_NoAGC10Gain_3pkthreshold_348samples.mat",
+    "Pluto1RX_9082_CC2595_TX_0.25meters_3pkthreshold_582samples.mat"]
+
+    datasets_allSDR=None
+    targets_allSDR=None
+    samples_perSDR=300
+    duplicate=4
+    magn=17.032302068590234
+    for matfilei in range(len(matFiles)):
+        matfile = matFiles[matfilei]
+        datasets_load=scipy.io.loadmat("./data/0.25meters/"+matfile)['packet_equalized_allrecord']
+        datasets_load = datasets_load[:samples_perSDR]
+        targets_load = matfilei*np.ones(datasets_load.shape[0])
+        print("SDR: {}, range: {}~{}".format(matfilei, datasets_load.min(), datasets_load.max()))
+        datasets_allSDR = np.concatenate([datasets_allSDR, datasets_load], axis=0) if matfilei!=0 else datasets_load
+        targets_allSDR = np.concatenate([targets_allSDR, targets_load], axis=0) if matfilei!=0 else targets_load
+    datasets_allSDR_magn = np.max((np.abs(datasets_allSDR.min()), np.abs(datasets_allSDR.max())))
+    datasets_allSDR = datasets_allSDR/datasets_allSDR_magn
+    print("datasets load all sdr shape: ", datasets_allSDR.shape)
+    print("targets load all sdr shape: ", targets_allSDR.shape)
+    print("datasets load all sdr and norm range: {}~{}".format(datasets_allSDR.min(), datasets_allSDR.max()))
     
     for SDRlabel in range(start, start+nSDR):
         print("\n-----------------SNR:{}, SDRlabel:{}-----------------".format(SNR, SDRlabel))
@@ -82,11 +135,17 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
         max_train_acc=0
         max_val_acc=0
 
-        datasets = datasets_all[SDRlabel*nrepeat: (SDRlabel+1)*nrepeat]
-        targets = targets_all[SDRlabel*nrepeat: (SDRlabel+1)*nrepeat]
-        datasets = addNoise2Batch(datasets, SNR, shape=datasets.shape[1:], norm=False, device=device)        
-        datasets=torch.tensor(datasets, dtype=float).to(device)
-        targets=torch.tensor(targets, dtype=torch.int64).to(device)
+        datasets = datasets_allSDR[SDRlabel*samples_perSDR: (SDRlabel+1)*samples_perSDR]
+        targets = targets_allSDR[SDRlabel*samples_perSDR: (SDRlabel+1)*samples_perSDR]
+        datasets_dup = np.zeros((datasets.shape[0]*duplicate, datasets.shape[1], datasets.shape[2]))
+        targets_dup = np.zeros((targets.shape[0]*duplicate,))
+        for d in range(1, duplicate):
+            datasets_dup[d*datasets.shape[0]: (d+1)*datasets.shape[0]] = addNoise2Batch(datasets, snr=SNR, norm=False, device=device)
+            targets_dup[d*datasets.shape[0]: (d+1)*datasets.shape[0]] = targets
+        
+
+        datasets=torch.tensor(datasets_dup, dtype=float).to(device)
+        targets=torch.tensor(targets_dup, dtype=torch.int64).to(device)
         print("datasets: ", datasets.shape)
         print("targets: ", targets.shape)
         print("datasets range: ", datasets.max(), datasets.min())
@@ -107,16 +166,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
         input_dim=1
         for i in range(1, len(datasets.shape)):
             input_dim=input_dim*datasets.shape[i]
-        latent_dim=2
-        poly_dim= degLen*memLen #15
-        generator = myMemPolyVAE(txReal=preamble_real, 
-                                 txImag=preamble_imag, 
-                                 input_dim=input_dim, 
-                                 latent_dim=latent_dim, 
-                                 poly_dim=poly_dim, 
-                                 batch_size=batch_size,  
-                                 device=device,
-                                 train=True).to(device)        
+        generator = sigGenerator(batch_size=batch_size, device=device).to(device)        
         discriminator = Discriminator(input_dim).to(device)
         
         criterion_disc = nn.BCELoss()
@@ -172,7 +222,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
                 optimizer_d.zero_grad()
 
                 # Fake data_hat given by generator
-                data_fake, mu, logvar = generator.forward(data, device=device)
+                data_fake = generator.forward(data, device=device)
                 fake_out_d = discriminator.forward(data_fake)
                 loss_fake_d = criterion_disc(fake_out_d, fake_label)
                 fake_out_d_bool = (fake_out_d-0.5)>0
@@ -199,7 +249,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
 
                 # Train generator
                 optimizer_g.zero_grad()
-                fake_out_g, mu, logvar = generator.forward(data, device=device)
+                fake_out_g = generator.forward(data, device=device)
                 fake_out_d = discriminator.forward(fake_out_g)
 
                 labels_ = classifier.forward(data)
@@ -212,7 +262,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
                 for i in range(batch_size):
                     train_acc_fake.append(labels_fake_arg[i].detach().cpu().numpy()==labels[i].detach().cpu().numpy())
 
-                loss_vae = generator.loss_function(fake_out_g, data, mu, logvar)
+                loss_vae = generator.loss_function(fake_out_g, data)
                 loss_cnn = criterion_cnn(labels_fake, labels)
                 loss_disc = criterion_disc(fake_out_d, real_label)
                 loss_g = 1*loss_cnn + 0.01*loss_vae + 0.1*loss_disc
@@ -226,7 +276,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
                 data, labels = data.to(device, dtype=torch.float), labels.to(device,  dtype=torch.int64)
 
                 # Fake data_hat given by generator
-                data_fake, mu, logvar = generator.forward(data, device=device)
+                data_fake = generator.forward(data, device=device)
                 fake_out_d = discriminator.forward(data_fake)
                 loss_fake_d = criterion_disc(fake_out_d, fake_label)
                 fake_out_d_bool = (fake_out_d-0.5)>0
@@ -243,7 +293,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
                 val_loss_d+=loss_d.item()
 
                 # Train generator
-                fake_out_g, mu, logvar = generator.forward(data, device=device)
+                fake_out_g  = generator.forward(data, device=device)
                 fake_out_d = discriminator.forward(fake_out_g)
 
                 labels_ = classifier.forward(data)
@@ -256,7 +306,7 @@ def main(seed, nSDR, LR, n_epoch, batch_size, SNR, degLen, memLen, clf_path, sav
                 for i in range(batch_size):
                     val_acc_fake.append(labels_fake_arg[i].detach().cpu().numpy()==labels[i].detach().cpu().numpy())
 
-                loss_vae = generator.loss_function(fake_out_g, data, mu, logvar)
+                loss_vae = generator.loss_function(fake_out_g, data)
                 loss_cnn = criterion_cnn(labels_fake, labels)
                 loss_disc = criterion_disc(fake_out_d, real_label)
                 loss_g =  1*loss_cnn + 0.01*loss_vae + 0.1*loss_disc
@@ -363,23 +413,16 @@ if __name__ == "__main__":
     seed=345
     degLen=5
     memLen=3
-    SNR = sys.argv[1:]
-    SNR = [int(x) for x in SNR][0]
-    nSDR = 220
-    LR = 5e-3
-    n_epoch = 5000
-    batch_size = 32
-    clf_path =  "./checkpoint2/classifier/wifi6e_220RFF_nrepeat300_epoch1000.cnn"
-    save_path = "./checkpoint2/gan/gan_poly_ray_WIFI6E220_normAll_nosnrclf_bn_poly_deg"+str(degLen)+"_mem"+str(memLen)+"/snr"+str(SNR)+"/seed"+str(seed)+"/"
+    if len(sys.argv)>1:
+        SNR = sys.argv[1:]
+        SNR = [int(x) for x in SNR][0]
+    else:
+        SNR = 35
+    save_path = "./checkpoint2/ganWOvae/gan_poly_ray_SDR_normAll_nosnrclf_bn_dup_poly_deg"+str(degLen)+"_mem"+str(memLen)+"_1/snr"+str(SNR)+"/seed"+str(seed)+"/"
     main(seed=seed,
-         nSDR=nSDR,
-         LR=LR,
-         n_epoch=n_epoch,
-         batch_size=batch_size,
          SNR=SNR,
          degLen=degLen,
          memLen=memLen,
-         clf_path=clf_path,
          save_ckp=True,
          save_time=True,
          save_path=save_path)

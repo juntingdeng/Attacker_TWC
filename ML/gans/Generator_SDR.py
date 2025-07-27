@@ -14,7 +14,7 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import scipy.io
 import csv
-from VAE import myMemPolyVAE
+from ML.gans.VAE import myMemPolyVAE
 from classifier_cnn import addNoise2Batch
 from GAN_SDR import ClassifierSDR, ReadSignalFromCsv
 # import matlab.engine
